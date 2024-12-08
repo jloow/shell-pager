@@ -219,10 +219,15 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
 Return non-nil if point moved"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
-  (let ((point (point)))
-    (eshell-next-prompt)
-    (unless (eq point (point))
-      (point))))
+  (let ((point (point))
+        (new-point))
+    (save-excursion
+      (eshell-next-prompt)
+      (when (and (not (eq point (point)))
+                 (not (eobp)))
+        (setq new-point (point))))
+    (when new-point
+      (goto-char new-point))))
 
 (defun shell-pager--eshell-previous ()
   "Move `eshell' to previous prompt and return item.
