@@ -100,7 +100,10 @@ Item is of the form:
     (save-excursion
       (erase-buffer)
       (insert
-       (or (map-elt item :command) "")
+       (propertize (or (map-elt item :command) "")
+                           'rear-nonsticky t
+                           'command t
+                           'face font-lock-doc-face)
        "\n\n"
        (or (map-elt item :output) "")))))
 
