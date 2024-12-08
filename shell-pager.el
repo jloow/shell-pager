@@ -5,6 +5,7 @@
 ;;
 
 (require 'em-prompt)
+(require 'comint)
 
 ;;; Code:
 
@@ -163,8 +164,8 @@ Item is of the form:
        (propertize (or (map-elt item :command) "")
                            'rear-nonsticky t
                            'command t
-                           'face font-lock-doc-face)
-       "\n\n"
+                           'face 'comint-highlight-input)
+       "\n"
        (or (map-elt item :output) "")))))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
