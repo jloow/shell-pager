@@ -89,6 +89,60 @@
     (shell-pager--initialize previous)
     previous))
 
+(defun shell-pager--current ()
+  "Show next interaction (command / output)."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (let* ((get-current (or (map-elt shell-pager--config :current)
+                          (error "No way to get current item")))
+         (shell-buffer (shell-pager--shell-buffer)))
+    (when get-current
+      (with-current-buffer shell-buffer
+        (funcall get-current)))))
+
+(defun shell-pager--shell-items ()
+  "Return a list of all items."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (let ((shell-buffer (shell-pager--shell-buffer))
+        (move-next (or (map-elt shell-pager--config :next)
+                       (error "No way to move to next item")))
+        (get-current (or (map-elt shell-pager--config :current)
+                         (error "No way to get current item")))
+        (items '()))
+    (with-current-buffer shell-buffer
+      (save-excursion
+        (goto-char (point-min))
+        (while (funcall move-next)
+          (let ((current-item (funcall get-current)))
+            (push current-item items)))
+        (nreverse items)))))
+
+(defun shell-pager--position ()
+  "Return the position in history.
+
+In the form:
+
+1 out of 3 = (1 . 3)."
+  (let* ((current (shell-pager--current))
+         (history (shell-pager--shell-items))
+         (pos (seq-position history current #'equal)))
+    (when (and current history pos)
+      (cons (1+ pos) (length history)))))
+
+(defun shell-pager--history-label ()
+  "Return the position in history of the primary shell buffer."
+  (let ((pos (or (shell-pager--position)
+                 (cons 1 1))))
+    (propertize (format "[%d/%d]\n\n" (car pos) (cdr pos))
+                'ignore t
+                'read-only t
+                'face font-lock-comment-face
+                'rear-nonsticky t)))
+
+
 (defun shell-pager--initialize (item)
   "Initialize pager with ITEM.
 
@@ -100,6 +154,7 @@ Item is of the form:
     (save-excursion
       (erase-buffer)
       (insert
+       (shell-pager--history-label)
        (propertize (or (map-elt item :command) "")
                            'rear-nonsticky t
                            'command t
@@ -154,21 +209,31 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
   (get-buffer-create "*shell pager*"))
 
 (defun shell-pager--eshell-next ()
-  "Move `eshell' to next prompt and return item."
+  "Move `eshell' to next prompt and return item.
+
+Return non-nil if point moved"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
-  (eshell-next-prompt))
+  (let ((point (point)))
+    (eshell-next-prompt)
+    (unless (eq point (point))
+      (point))))
 
 (defun shell-pager--eshell-previous ()
-  "Move `eshell' to previous prompt and return item."
+  "Move `eshell' to previous prompt and return item.
+
+Return non-nil if point moved"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
-  (let ((line (line-number-at-pos)))
+  (let ((line (line-number-at-pos))
+        (point (point)))
     (eshell-previous-prompt)
     ;; eshell may have a banner (no prompt)
     ;; go to point-min instead.
     (when (eq line (line-number-at-pos))
-      (goto-char (point-min)))))
+      (goto-char (point-min)))
+    (unless (eq point (point))
+      (point))))
 
 (defun shell-pager--eshell-current-item ()
   "Return current eshell item.
