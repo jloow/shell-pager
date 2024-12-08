@@ -106,15 +106,19 @@
   (interactive)
   (unless (eq (current-buffer) (shell-pager--buffer))
     (error "Not in a pager buffer"))
-  (let ((shell-buffer (shell-pager--shell-buffer))
-        (move-next (or (map-elt shell-pager--config :next)
-                       (error "No way to move to next item")))
-        (get-current (or (map-elt shell-pager--config :current)
-                         (error "No way to get current item")))
-        (items '()))
+  (let* ((shell-buffer (shell-pager--shell-buffer))
+         (move-next (or (map-elt shell-pager--config :next)
+                        (error "No way to move to next item")))
+         (get-current (or (map-elt shell-pager--config :current)
+                          (error "No way to get current item")))
+         (first-item)
+         (items '()))
     (with-current-buffer shell-buffer
       (save-excursion
         (goto-char (point-min))
+        (setq first-item (funcall get-current))
+        (when first-item
+          (push first-item items))
         (while (funcall move-next)
           (let ((current-item (funcall get-current)))
             (push current-item items)))
@@ -260,9 +264,8 @@ Item is of the form:
                              command-start
                              command-end)))
           (setq command-start nil)))
-      (if command-end
-          (goto-char command-end)
-        (goto-char (point-min)))
+      (when command-end
+        (goto-char command-end))
       (setq output-start (point))
       (when (re-search-forward eshell-prompt-regexp nil t)
         (setq output-end (match-beginning 0))
