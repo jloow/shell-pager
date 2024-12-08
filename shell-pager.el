@@ -117,7 +117,8 @@
       (save-excursion
         (goto-char (point-min))
         (setq first-item (funcall get-current))
-        (when first-item
+        (unless (or (string-empty-p (map-elt first-item :command))
+                    (string-empty-p (map-elt first-item :output)))
           (push first-item items))
         (while (funcall move-next)
           (let ((current-item (funcall get-current)))
@@ -230,14 +231,17 @@ Return non-nil if point moved"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
   (let ((line (line-number-at-pos))
-        (point (point)))
-    (eshell-previous-prompt)
-    ;; eshell may have a banner (no prompt)
-    ;; go to point-min instead.
-    (when (eq line (line-number-at-pos))
-      (goto-char (point-min)))
-    (unless (eq point (point))
-      (point))))
+        (new-point))
+    (save-excursion
+      (eshell-previous-prompt)
+      ;; eshell may have a banner (no prompt)
+      ;; go to point-min instead.
+      (when (eq line (line-number-at-pos))
+        (setq new-point (point-min)))
+      (unless (eq line (line-number-at-pos))
+        (setq new-point (point))))
+    (when new-point
+      (goto-char new-point))))
 
 (defun shell-pager--eshell-current-item ()
   "Return current eshell item.
@@ -274,6 +278,10 @@ Item is of the form:
                       output-end)))
       (when (or command output)
         (list :command command
-              :output output)))))
+              :command-start command-start
+              :command-end command-end
+              :output output
+              :output-start output-start
+              :output-end output-end)))))
 
 ;;; shell-pager.el ends here
