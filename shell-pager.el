@@ -54,15 +54,18 @@
   (interactive)
   (unless (eq (current-buffer) (shell-pager--buffer))
     (error "Not in a pager buffer"))
-  (let* ((get-next (or (map-elt shell-pager--config :next)
-                       (error "No way to get next item")))
+  (let* ((move-next (or (map-elt shell-pager--config :next)
+                        (error "No way to move to next item")))
+         (get-current (or (map-elt shell-pager--config :current)
+                          (error "No way to get current item")))
          (shell-buffer (shell-pager--shell-buffer))
          (window (get-buffer-window shell-buffer))
          (next (with-current-buffer shell-buffer
                  (if window
                      (with-selected-window window
-                       (funcall get-next)))
-                 (funcall get-next))))
+                       (funcall move-next))
+                   (funcall move-next))
+                 (funcall get-current))))
     (shell-pager--initialize next)
     next))
 
@@ -73,13 +76,16 @@
     (error "Not in a pager buffer"))
   (let* ((get-previous (or (map-elt shell-pager--config :previous)
                            (error "No way to get previous item")))
+         (get-current (or (map-elt shell-pager--config :current)
+                          (error "No way to get current item")))
          (shell-buffer (shell-pager--shell-buffer))
          (window (get-buffer-window shell-buffer))
          (previous (with-current-buffer shell-buffer
                      (if window
                          (with-selected-window window
-                           (funcall get-previous)))
-                     (funcall get-previous))))
+                           (funcall get-previous))
+                       (funcall get-previous))
+                     (funcall get-current))))
     (shell-pager--initialize previous)
     previous))
 
@@ -99,10 +105,11 @@ Item is of the form:
        (or (map-elt item :output) "")))))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
+                                         current
                                          next previous)
   "Make pager config.
 
-Requires SHELL-BUFFER as well as NEXT and PREVIOUS functions."
+Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
   (let ((config))
     (when shell-buffer
       (setq config
@@ -116,6 +123,10 @@ Requires SHELL-BUFFER as well as NEXT and PREVIOUS functions."
       (setq config
             (map-insert config
                         :previous previous)))
+    (when current
+      (setq config
+            (map-insert config
+                        :current current)))
     config))
 
 (defun shell-pager--resolve-shell-buffer (buffer)
@@ -125,7 +136,8 @@ Requires SHELL-BUFFER as well as NEXT and PREVIOUS functions."
            (shell-pager--make-config
             :shell-buffer buffer
             :next #'shell-pager--eshell-next
-            :previous #'shell-pager--eshell-previous))
+            :previous #'shell-pager--eshell-previous
+            :current #'shell-pager--eshell-current-item))
           (t
            (error "Don't know how to page %s" major-mode)))))
 
@@ -147,8 +159,7 @@ Item is of the form:
  :output \"shell-pager.el\")"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
-  (eshell-next-prompt)
-  (shell-pager--eshell-current-item))
+  (eshell-next-prompt))
 
 (defun shell-pager--eshell-previous ()
   "Move `eshell' to previous prompt and return item.
@@ -159,8 +170,12 @@ Item is of the form:
  :output \"shell-pager.el\")"
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
-  (eshell-previous-prompt)
-  (shell-pager--eshell-current-item))
+  (let ((line (line-number-at-pos)))
+    (eshell-previous-prompt)
+    ;; eshell may have a banner (no prompt)
+    ;; go to point-min instead.
+    (when (eq line (line-number-at-pos))
+      (goto-char (point-min)))))
 
 (defun shell-pager--eshell-current-item ()
   "Return current eshell item.
@@ -180,22 +195,24 @@ Item is of the form:
           (output))
       (when (re-search-backward eshell-prompt-regexp nil t)
         (setq command-start (match-end 0))
-        (goto-char command-start)
-        (end-of-line)
-        (setq command-end (point))
-        (setq command (buffer-substring-no-properties
-                       command-start
-                       command-end)))
-      (forward-line)
+        (if-let ((match (text-property-search-forward 'field nil nil t)))
+            (progn
+              (setq command-end (prop-match-beginning match))
+              (setq command (buffer-substring-no-properties
+                             command-start
+                             command-end)))
+          (setq command-start nil)))
+      (if command-end
+          (goto-char command-end)
+        (goto-char (point-min)))
       (setq output-start (point))
       (when (re-search-forward eshell-prompt-regexp nil t)
         (setq output-end (match-beginning 0))
-        (setq output (buffer-substring-no-properties
+        (setq output (buffer-substring
                       output-start
                       output-end)))
-      (when command
-        (list :command (string-trim command)
-              :output (when output
-                        (string-trim output)))))))
+      (when (or command output)
+        (list :command command
+              :output output)))))
 
 ;;; shell-pager.el ends here
