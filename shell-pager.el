@@ -154,23 +154,13 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
   (get-buffer-create "*shell pager*"))
 
 (defun shell-pager--eshell-next ()
-  "Move `eshell' to next prompt and return item.
-
-Item is of the form:
-
-\(:command \"ls\"
- :output \"shell-pager.el\")"
+  "Move `eshell' to next prompt and return item."
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
   (eshell-next-prompt))
 
 (defun shell-pager--eshell-previous ()
-  "Move `eshell' to previous prompt and return item.
-
-Item is of the form:
-
-\(:command \"ls\"
- :output \"shell-pager.el\")"
+  "Move `eshell' to previous prompt and return item."
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
   (let ((line (line-number-at-pos)))
