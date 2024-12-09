@@ -14,6 +14,7 @@
 (defvar shell-pager-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'shell-pager-submit)
+    (define-key map (kbd "C-c C-k") #'shell-pager-reset)
     map))
 
 (define-derived-mode shell-pager-mode fundamental-mode "shell pager"
@@ -22,6 +23,7 @@
 
 (defvar shell-pager-view-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'shell-pager-quit)
     (define-key map (kbd "n") #'shell-pager-next)
     (define-key map (kbd "p") #'shell-pager-previous)
     (define-key map (kbd "c") #'shell-pager-compose-command)
@@ -124,8 +126,7 @@
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert
-     (shell-pager--make-buffer-content
-      :label-override "new"))))
+     (shell-pager--make-compose-buffer-content))))
 
 (defun shell-pager-submit ()
   "Submit composed shell command."
@@ -174,6 +175,23 @@
     (when interrupt
       (with-current-buffer shell-buffer
         (funcall interrupt)))))
+
+(defun shell-pager-quit ()
+  "Quit shell pager."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (quit-restore-window (get-buffer-window (current-buffer)) 'kill))
+
+(defun shell-pager-reset ()
+  "Exit compose buffer."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (let ((shell-buffer (or (map-elt shell-pager--config :shell-buffer)
+                          (error "No shell available"))))
+    (with-current-buffer shell-buffer
+      (shell-pager))))
 
 (defun shell-pager--current ()
   "Show next interaction (command / output)."
@@ -297,6 +315,14 @@ Item is of the form:
      "\n")
    (when output
      output)))
+
+(defun shell-pager--make-compose-buffer-content ()
+  "Make buffer content with POSITION, COMMAND, and OUTPUT."
+  (propertize "[compose]\n\n"
+              'ignore t
+              'read-only t
+              'face 'font-lock-escape-face
+              'rear-nonsticky t))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
                                          page-buffer
