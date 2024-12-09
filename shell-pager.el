@@ -110,6 +110,8 @@
   (let* ((shell-buffer (shell-pager--shell-buffer))
          (move-next (or (map-elt shell-pager--config :next)
                         (error "No way to move to next item")))
+         (move-previous (or (map-elt shell-pager--config :previous)
+                            (error "No way to move to previous item")))
          (get-current (or (map-elt shell-pager--config :current)
                           (error "No way to get current item")))
          (first-item)
@@ -117,9 +119,13 @@
     (with-current-buffer shell-buffer
       (save-excursion
         (goto-char (point-min))
+        ;; Normalize moving to first item
+        ;; by moving once down and two up.
+        (funcall move-next)
+        (funcall move-previous)
+        (funcall move-previous)
         (setq first-item (funcall get-current))
-        (unless (or (string-empty-p (map-elt first-item :command))
-                    (string-empty-p (map-elt first-item :output)))
+        (when first-item
           (push first-item items))
         (while (funcall move-next)
           (let ((current-item (funcall get-current)))
@@ -134,7 +140,20 @@ In the form:
 1 out of 3 = (1 . 3)."
   (let* ((current (shell-pager--current))
          (history (shell-pager--shell-items))
-         (pos (seq-position history current #'equal)))
+         (pos (seq-position history current
+                            ;; Must compare against locations as
+                            ;; commands and even outputs can yield
+                            ;; false positives.
+                            (lambda (lhs rhs)
+                              (and
+                               (equal (map-elt lhs :command-start)
+                                      (map-elt rhs :command-start))
+                               (equal (map-elt lhs :command-end)
+                                      (map-elt rhs :command-end))
+                               (equal (map-elt lhs :output-start)
+                                      (map-elt rhs :output-start))
+                               (equal (map-elt lhs :output-end)
+                                      (map-elt rhs :output-end)))))))
     (when (and current history pos)
       (cons (1+ pos) (length history)))))
 
