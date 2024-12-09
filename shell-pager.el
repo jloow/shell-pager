@@ -27,6 +27,7 @@
     (define-key map (kbd "n") #'shell-pager-next)
     (define-key map (kbd "p") #'shell-pager-previous)
     (define-key map (kbd "c") #'shell-pager-compose-command)
+    (define-key map (kbd "o") #'shell-pager-other-buffer)
     (define-key map (kbd "C-c C-c") #'shell-pager-interrupt)
     map))
 
@@ -182,6 +183,15 @@
   (unless (eq (current-buffer) (shell-pager--buffer))
     (error "Not in a pager buffer"))
   (quit-restore-window (get-buffer-window (current-buffer)) 'kill))
+
+(defun shell-pager-other-buffer ()
+  "Show other buffer (the actual shell)."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (let ((shell-buffer (or (map-elt shell-pager--config :shell-buffer)
+                          (error "No shell available"))))
+    (switch-to-buffer shell-buffer)))
 
 (defun shell-pager-reset ()
   "Exit compose buffer."
