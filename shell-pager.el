@@ -13,7 +13,7 @@
 
 (defvar shell-pager-mode-map
   (let ((map (make-sparse-keymap)))
-    ;; TODO: Add editing commands.
+    (define-key map (kbd "C-c C-c") #'shell-pager-submit)
     map))
 
 (define-derived-mode shell-pager-mode fundamental-mode "shell pager"
@@ -24,6 +24,8 @@
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "n") #'shell-pager-next)
     (define-key map (kbd "p") #'shell-pager-previous)
+    (define-key map (kbd "c") #'shell-pager-compose-command)
+    (define-key map (kbd "C-c C-c") #'shell-pager-interrupt)
     map))
 
 (define-minor-mode shell-pager-view-mode
@@ -40,15 +42,19 @@
   (unless (derived-mode-p 'eshell-mode)
     (user-error "Not in eshell"))
   (let ((shell-buffer (current-buffer))
-        (entry (shell-pager--eshell-current-item)))
+        (entry (shell-pager--eshell-current-item))
+        (config))
     (with-current-buffer (shell-pager--buffer)
       (shell-pager-mode)
       (shell-pager-view-mode +1)
-      (setq shell-pager--config
-            (shell-pager--resolve-shell-buffer shell-buffer))
+      (setq config (shell-pager--resolve-shell-buffer shell-buffer))
+      (setq shell-pager--config config)
       (let ((inhibit-read-only t))
-        (shell-pager--initialize entry))
-      (switch-to-buffer (current-buffer)))))
+        (shell-pager--initialize entry)))
+    (when (map-elt config :subscribe)
+      (funcall (map-elt config :subscribe)
+               (shell-pager--buffer)))
+    (switch-to-buffer (shell-pager--buffer))))
 
 (defun shell-pager-next ()
   "Show next interaction (command / output)."
@@ -59,8 +65,11 @@
                         (error "No way to move to next item")))
          (get-current (or (map-elt shell-pager--config :current)
                           (error "No way to get current item")))
+         (subscribe (map-elt shell-pager--config :subscribe))
          (shell-buffer (shell-pager--shell-buffer))
+         (page-buffer (shell-pager--buffer))
          (window (get-buffer-window shell-buffer))
+         (last (car (last (shell-pager--shell-items))))
          (next (with-current-buffer shell-buffer
                  (if window
                      (with-selected-window window
@@ -68,6 +77,11 @@
                    (funcall move-next))
                  (funcall get-current))))
     (shell-pager--initialize next)
+    (when (and subscribe
+               (equal (map-elt next :command-start)
+                      (map-elt last :command-start)))
+      (with-current-buffer shell-buffer
+        (funcall subscribe page-buffer)))
     next))
 
 (defun shell-pager-previous ()
@@ -79,6 +93,8 @@
                            (error "No way to get previous item")))
          (get-current (or (map-elt shell-pager--config :current)
                           (error "No way to get current item")))
+         (page-buffer (shell-pager--buffer))
+         (unsubscribe (map-elt shell-pager--config :unsubscribe))
          (shell-buffer (shell-pager--shell-buffer))
          (window (get-buffer-window shell-buffer))
          (previous (with-current-buffer shell-buffer
@@ -87,8 +103,72 @@
                            (funcall get-previous))
                        (funcall get-previous))
                      (funcall get-current))))
+    (when unsubscribe
+      (with-current-buffer shell-buffer
+        (funcall unsubscribe page-buffer)))
     (shell-pager--initialize previous)
     previous))
+
+(defun shell-pager-compose-command ()
+  "Compose a new shell command."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (interactive)
+  (unless (and (map-elt shell-pager--config :submit)
+               (map-elt shell-pager--config :subscribe))
+    (error "Composing not supported for %s"
+           (with-current-buffer (map-elt shell-pager--config :shell-buffer)
+             major-mode)))
+  (shell-pager-view-mode -1)
+  (let ((inhibit-read-only t))
+    (erase-buffer)))
+
+(defun shell-pager-submit ()
+  "Submit composed shell command."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (unless (and (map-elt shell-pager--config :submit)
+               (map-elt shell-pager--config :subscribe))
+    (error "Composing not supported for %s"
+           (with-current-buffer (map-elt shell-pager--config :shell-buffer)
+             major-mode)))
+  (let ((command (string-trim (buffer-substring-no-properties (point-min)
+                                                              (point-max))))
+        (history-length (length (shell-pager--shell-items)))
+        (shell-buffer (map-elt shell-pager--config :shell-buffer))
+        (inhibit-read-only t))
+    (when (string-empty-p command)
+      (user-error "Nothing to send"))
+    (erase-buffer)
+    (insert
+     (shell-pager--make-buffer-content
+      :position (cons history-length history-length)
+      :command command)
+     "\n")
+    (goto-char (point-min))
+    (text-property-search-forward 'command t)
+    (shell-pager-view-mode)
+    (when (map-elt shell-pager--config :subscribe)
+      (with-current-buffer shell-buffer
+        (funcall (map-elt shell-pager--config :subscribe)
+                 (shell-pager--buffer))))
+    (funcall (map-elt shell-pager--config :submit)
+             command)))
+
+(defun shell-pager-interrupt ()
+  "Interrupt current shell command."
+  (interactive)
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  ;; TODO: Check if busy and confirm interruption with user.
+  (let* ((interrupt (or (map-elt shell-pager--config :interrupt)
+                        (error "No way to interrupt shell")))
+         (shell-buffer (shell-pager--shell-buffer)))
+    (when interrupt
+      (with-current-buffer shell-buffer
+        (funcall interrupt)))))
 
 (defun shell-pager--current ()
   "Show next interaction (command / output)."
@@ -145,28 +225,26 @@ In the form:
                             ;; commands and even outputs can yield
                             ;; false positives.
                             (lambda (lhs rhs)
-                              (and
-                               (equal (map-elt lhs :command-start)
-                                      (map-elt rhs :command-start))
-                               (equal (map-elt lhs :command-end)
-                                      (map-elt rhs :command-end))
+                              (or
                                (equal (map-elt lhs :output-start)
                                       (map-elt rhs :output-start))
-                               (equal (map-elt lhs :output-end)
-                                      (map-elt rhs :output-end)))))))
+                               (equal (map-elt lhs :command-start)
+                                      (map-elt rhs :command-start)))))))
     (when (and current history pos)
       (cons (1+ pos) (length history)))))
 
-(defun shell-pager--history-label ()
-  "Return the position in history of the primary shell buffer."
-  (let ((pos (or (shell-pager--position)
+(cl-defun shell-pager--history-label (&key override)
+  "Return the position in history of the primary shell buffer.
+
+Can OVERRIDE position to be rendered."
+  (let ((pos (or override
+                 (shell-pager--position)
                  (cons 1 1))))
     (propertize (format "[%d/%d]\n\n" (car pos) (cdr pos))
                 'ignore t
                 'read-only t
                 'face font-lock-comment-face
                 'rear-nonsticky t)))
-
 
 (defun shell-pager--initialize (item)
   "Initialize pager with ITEM.
@@ -179,25 +257,45 @@ Item is of the form:
     (save-excursion
       (erase-buffer)
       (insert
-       (shell-pager--history-label)
-       (propertize (or (map-elt item :command) "")
-                           'rear-nonsticky t
-                           'command t
-                           'face 'comint-highlight-input)
-       "\n"
-       (or (map-elt item :output) "")))))
+       (shell-pager--make-buffer-content
+        :command (map-elt item :command)
+        :output (map-elt item :output))))))
+
+(cl-defun shell-pager--make-buffer-content (&key position
+                                                 command
+                                                 output)
+  "Make buffer content with POSITION, COMMAND, and OUTPUT."
+  (concat
+   (shell-pager--history-label :override position)
+   (propertize (or command "")
+               'rear-nonsticky t
+               'command t
+               'face 'comint-highlight-input)
+   "\n"
+   (or output "")))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
+                                         page-buffer
                                          current
-                                         next previous)
+                                         next previous
+                                         subscribe unsubscribe
+                                         submit interrupt)
   "Make pager config.
 
-Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
+Requires SHELL-BUFFER/PAGE-BUFFER as well as CURRENT, NEXT and PREVIOUS
+functions.
+
+For a richer experience provide SUBSCRIBE, UNSUBSCRIBE, SUBMIT and INTERRUPT
+functions."
   (let ((config))
     (when shell-buffer
       (setq config
             (map-insert config
                         :shell-buffer shell-buffer)))
+    (when page-buffer
+      (setq config
+            (map-insert config
+                        :page-buffer page-buffer)))
     (when next
       (setq config
             (map-insert config
@@ -210,6 +308,22 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
       (setq config
             (map-insert config
                         :current current)))
+    (when subscribe
+      (setq config
+            (map-insert config
+                        :subscribe subscribe)))
+    (when unsubscribe
+      (setq config
+            (map-insert config
+                        :unsubscribe unsubscribe)))
+    (when submit
+      (setq config
+            (map-insert config
+                        :submit submit)))
+    (when interrupt
+      (setq config
+            (map-insert config
+                        :interrupt interrupt)))
     config))
 
 (defun shell-pager--resolve-shell-buffer (buffer)
@@ -218,9 +332,14 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
     (cond ((derived-mode-p 'eshell-mode)
            (shell-pager--make-config
             :shell-buffer buffer
+            :page-buffer (shell-pager--buffer)
             :next #'shell-pager--eshell-next
             :previous #'shell-pager--eshell-previous
-            :current #'shell-pager--eshell-current-item))
+            :current #'shell-pager--eshell-current-item
+            :subscribe #'shell-pager--eshell-subscribe
+            :unsubscribe #'shell-pager--eshell-unsubscribe
+            :submit #'shell-pager--eshell-submit
+            :interrupt #'shell-pager--eshell-interrupt))
           (t
            (error "Don't know how to page %s" major-mode)))))
 
@@ -232,6 +351,54 @@ Requires SHELL-BUFFER as well as CURRENT, NEXT and PREVIOUS functions."
 (defun shell-pager--buffer ()
   "Get the available shell pager buffer."
   (get-buffer-create "*shell pager*"))
+
+(defun shell-pager--eshell-interrupt ()
+  "Interrupt eshell's ongoing command."
+  (unless (eq major-mode 'eshell-mode)
+    (error "Not in an eshell buffer"))
+  (eshell-interrupt-process))
+
+(defun shell-pager--eshell-subscribe (page-buffer)
+  "Subscribe PAGE-BUFFER to `eshell' output."
+  (unless (eq major-mode 'eshell-mode)
+    (error "Not in an eshell buffer"))
+  (let ((config (with-current-buffer page-buffer
+                  shell-pager--config)))
+    (cl-assert config nil "Must have a shell-pager config")
+    (setq-local shell-pager--config config)
+    (add-hook 'eshell-output-filter-functions
+              #'shell-pager--eshell-output-filter
+              nil t)))
+
+(defun shell-pager--eshell-unsubscribe (page-buffer)
+  "Unsubscribe PAGE-BUFFER from `eshell' output."
+  (unless (eq major-mode 'eshell-mode)
+    (error "Not in an eshell buffer"))
+  (let ((config (with-current-buffer page-buffer
+                  shell-pager--config)))
+    (cl-assert config nil "Must have a shell-pager config")
+    (setq-local shell-pager--config config)
+    (remove-hook 'eshell-output-filter-functions
+                 #'shell-pager--eshell-output-filter t)))
+
+(defun shell-pager--eshell-output-filter ()
+  "Handle `eshell' output as per `eshell-output-filter-functions'."
+  (unless (eq major-mode 'eshell-mode)
+    (error "Not in an eshell buffer"))
+  (when-let* ((config shell-pager--config)
+              (live-pager (buffer-live-p (map-elt config :page-buffer)))
+              (output (replace-regexp-in-string
+                       eshell-prompt-regexp ""
+                       (buffer-substring
+                        eshell-last-output-start
+                        eshell-last-output-end))))
+    (with-current-buffer (or (map-elt config :page-buffer)
+                             (error "No pager available"))
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (point-max))
+          (insert output)))))
+  nil)
 
 (defun shell-pager--eshell-next ()
   "Move `eshell' to next prompt and return item.
@@ -271,6 +438,13 @@ Return non-nil if point moved"
     (when new-point
       (goto-char new-point))))
 
+(defun shell-pager--eshell-submit (command)
+  "Submit COMMAND to eshell for execution."
+  (with-current-buffer (shell-pager--shell-buffer)
+    (goto-char (point-max))
+    (insert command)
+    (eshell-send-input)))
+
 (defun shell-pager--eshell-current-item ()
   "Return current eshell item.
 
@@ -299,8 +473,16 @@ Item is of the form:
       (when command-end
         (goto-char command-end))
       (setq output-start (point))
-      (when (re-search-forward eshell-prompt-regexp nil t)
-        (setq output-end (match-beginning 0))
+      (if (re-search-forward eshell-prompt-regexp nil t)
+          (progn
+            (setq output-end (match-beginning 0))
+            (setq output (buffer-substring
+                          output-start
+                          output-end)))
+        ;; No next prompt.
+        ;; Process is likely alive.
+        ;; Grab output until end of buffer.
+        (setq output-end (point-max))
         (setq output (buffer-substring
                       output-start
                       output-end)))
