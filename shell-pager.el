@@ -242,7 +242,10 @@ Return non-nil if point moved"
       (eshell-previous-prompt)
       ;; eshell may have a banner (no prompt)
       ;; go to point-min instead.
-      (when (eq line (line-number-at-pos))
+      (when (and (eq line (line-number-at-pos))
+                 (save-excursion
+                   (goto-char (point-min))
+                   (not (eq (line-number-at-pos) line))))
         (setq new-point (point-min)))
       (unless (eq line (line-number-at-pos))
         (setq new-point (point))))
