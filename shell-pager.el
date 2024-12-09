@@ -122,7 +122,10 @@
              major-mode)))
   (shell-pager-view-mode -1)
   (let ((inhibit-read-only t))
-    (erase-buffer)))
+    (erase-buffer)
+    (insert
+     (shell-pager--make-buffer-content
+      :label-override "new"))))
 
 (defun shell-pager-submit ()
   "Submit composed shell command."
@@ -134,8 +137,8 @@
     (error "Composing not supported for %s"
            (with-current-buffer (map-elt shell-pager--config :shell-buffer)
              major-mode)))
-  (let ((command (string-trim (buffer-substring-no-properties (point-min)
-                                                              (point-max))))
+  ;; TODO: Confirm with user if aborting is needed.
+  (let ((command (shell-pager--compose-text))
         (history-length (length (shell-pager--shell-items)))
         (shell-buffer (map-elt shell-pager--config :shell-buffer))
         (inhibit-read-only t))
@@ -144,7 +147,9 @@
     (erase-buffer)
     (insert
      (shell-pager--make-buffer-content
-      :position (cons history-length history-length)
+      :label-override (format "%d/%d"
+                              (1+ history-length)
+                              (1+ history-length))
       :command command)
      "\n")
     (goto-char (point-min))
@@ -237,14 +242,30 @@ In the form:
   "Return the position in history of the primary shell buffer.
 
 Can OVERRIDE position to be rendered."
-  (let ((pos (or override
-                 (shell-pager--position)
-                 (cons 1 1))))
-    (propertize (format "[%d/%d]\n\n" (car pos) (cdr pos))
+  (let ((text (or override
+                  (when-let ((pos (shell-pager--position)))
+                    (format "%d/%d" (car pos) (cdr pos)))
+                  "?/?")))
+    (propertize (format "[%s]\n\n" text)
                 'ignore t
                 'read-only t
                 'face font-lock-comment-face
                 'rear-nonsticky t)))
+
+(defun shell-pager--compose-text ()
+  "Get the compose buffer text (excluding header)."
+  (unless (eq (current-buffer) (shell-pager--buffer))
+    (error "Not in a pager buffer"))
+  (let ((text (buffer-string))
+        (result "")
+        (pos 0))
+    (while (< pos (length text))
+      (let ((next (or (next-single-property-change pos 'ignore text)
+                      (length text))))
+        (unless (get-text-property pos 'ignore text)
+          (setq result (concat result (substring text pos next))))
+        (setq pos next)))
+    (string-trim result)))
 
 (defun shell-pager--initialize (item)
   "Initialize pager with ITEM.
@@ -261,18 +282,21 @@ Item is of the form:
         :command (map-elt item :command)
         :output (map-elt item :output))))))
 
-(cl-defun shell-pager--make-buffer-content (&key position
+(cl-defun shell-pager--make-buffer-content (&key label-override
                                                  command
                                                  output)
   "Make buffer content with POSITION, COMMAND, and OUTPUT."
   (concat
-   (shell-pager--history-label :override position)
-   (propertize (or command "")
-               'rear-nonsticky t
-               'command t
-               'face 'comint-highlight-input)
-   "\n"
-   (or output "")))
+   (shell-pager--history-label :override label-override)
+   (when command
+     (propertize command
+                 'rear-nonsticky t
+                 'command t
+                 'face 'comint-highlight-input))
+   (when command
+     "\n")
+   (when output
+     output)))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
                                          page-buffer
