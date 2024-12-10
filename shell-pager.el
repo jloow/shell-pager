@@ -27,6 +27,8 @@
     (define-key map (kbd "n") #'shell-pager-next)
     (define-key map (kbd "p") #'shell-pager-previous)
     (define-key map (kbd "c") #'shell-pager-compose-command)
+    (define-key map (kbd "i") #'shell-pager-compose-command)
+    (define-key map (kbd "r") #'shell-pager-compose-command)
     (define-key map (kbd "o") #'shell-pager-other-buffer)
     (define-key map (kbd "C-c C-c") #'shell-pager-interrupt)
     map))
