@@ -151,9 +151,7 @@
     (erase-buffer)
     (insert
      (shell-pager--make-buffer-content
-      :label-override (format "%d/%d"
-                              (1+ history-length)
-                              (1+ history-length))
+      :header (shell-pager--header :new-candidate t)
       :command command)
      "\n")
     (goto-char (point-min))
@@ -247,7 +245,7 @@
             (push current-item items)))
         (nreverse items)))))
 
-(defun shell-pager--position ()
+(cl-defun shell-pager--position (&key new-candidate)
   "Return the position in history.
 
 In the form:
@@ -255,32 +253,41 @@ In the form:
 1 out of 3 = (1 . 3)."
   (let* ((current (shell-pager--current))
          (history (shell-pager--shell-items))
-         (pos (seq-position history current
-                            ;; Must compare against locations as
-                            ;; commands and even outputs can yield
-                            ;; false positives.
-                            (lambda (lhs rhs)
-                              (or
-                               (equal (map-elt lhs :output-start)
-                                      (map-elt rhs :output-start))
-                               (equal (map-elt lhs :command-start)
-                                      (map-elt rhs :command-start)))))))
-    (when (and current history pos)
-      (cons (1+ pos) (length history)))))
+         (length (length history))
+         (pos (if new-candidate
+                  (1+ length)
+                (seq-position history current
+                              ;; Must compare against locations as
+                              ;; commands and even outputs can yield
+                              ;; false positives.
+                              (lambda (lhs rhs)
+                                (or
+                                 (equal (map-elt lhs :output-start)
+                                        (map-elt rhs :output-start))
+                                 (equal (map-elt lhs :command-start)
+                                        (map-elt rhs :command-start))))))))
+    (if new-candidate
+        (cons pos (1+ length))
+      (when (and current history pos)
+        (cons (1+ pos) (length history))))))
 
-(cl-defun shell-pager--history-label (&key override)
-  "Return the position in history of the primary shell buffer.
+(cl-defun shell-pager--header (&key new-candidate)
+  "Return the header text.
 
 Can OVERRIDE position to be rendered."
-  (let ((text (or override
-                  (when-let ((pos (shell-pager--position)))
-                    (format "%d/%d" (car pos) (cdr pos)))
-                  "?/?")))
-    (propertize (format "[%s]\n\n" text)
-                'ignore t
-                'read-only t
-                'face font-lock-comment-face
-                'rear-nonsticky t)))
+  (shell-pager--propertize-header (format "%s\n\n" (shell-pager--page-num :new-candidate new-candidate))))
+
+(cl-defun shell-pager--page-num (&key new-candidate)
+  (if-let ((pos (shell-pager--position :new-candidate new-candidate)))
+      (format "[%d/%d]" (car pos) (cdr pos))
+    "[?/?]"))
+
+(defun shell-pager--propertize-header (text)
+  (propertize text
+              'ignore t
+              'read-only t
+              'face font-lock-comment-face
+              'rear-nonsticky t))
 
 (defun shell-pager--compose-text ()
   "Get the compose buffer text (excluding header)."
@@ -309,15 +316,22 @@ Item is of the form:
       (erase-buffer)
       (insert
        (shell-pager--make-buffer-content
+        :header (shell-pager--header)
         :command (map-elt item :command)
-        :output (map-elt item :output))))))
+        :output (map-elt item :output))))
+    (if (map-elt item :command)
+        (progn
+          (goto-char (point-min))
+          (text-property-search-forward 'command t))
+      (goto-char (point-min))
+      (text-property-search-forward 'ignore nil))))
 
-(cl-defun shell-pager--make-buffer-content (&key label-override
+(cl-defun shell-pager--make-buffer-content (&key header
                                                  command
                                                  output)
   "Make buffer content with POSITION, COMMAND, and OUTPUT."
   (concat
-   (shell-pager--history-label :override label-override)
+   header
    (when command
      (propertize command
                  'rear-nonsticky t
