@@ -11,6 +11,14 @@
 
 ;;; Code:
 
+(defcustom shell-pager-process-header-prompt
+  (lambda (prompt)
+    "Remove trailing `$`, ignore trailing spaces."
+    (replace-regexp-in-string "[ \t]*\\$[ \t]*$" "" prompt))
+  "How long to wait for a request to time out in seconds."
+  :type 'function
+  :group 'shell-pager)
+
 (defvar-local shell-pager--config nil)
 
 (defvar shell-pager-mode-map
@@ -29,6 +37,8 @@
     (define-key map (kbd "n") #'shell-pager-next)
     (define-key map (kbd "p") #'shell-pager-previous)
     (define-key map (kbd "c") #'shell-pager-compose-command)
+    (define-key map (kbd "i") #'shell-pager-compose-command)
+    (define-key map (kbd "r") #'shell-pager-compose-command)
     (define-key map (kbd "o") #'shell-pager-other-buffer)
     (define-key map (kbd "C-c C-c") #'shell-pager-interrupt)
     map))
@@ -154,9 +164,8 @@
     (erase-buffer)
     (insert
      (shell-pager--make-buffer-content
-      :label-override (format "%d/%d"
-                              (1+ history-length)
-                              (1+ history-length))
+      :header (shell-pager--propertize-header
+               (format "%s\n\n" (shell-pager--page-num :new-candidate t)))
       :command command)
      "\n")
     (goto-char (point-min))
@@ -167,7 +176,11 @@
         (funcall (map-elt shell-pager--config :subscribe)
                  (shell-pager--buffer))))
     (funcall (map-elt shell-pager--config :submit)
-             command)))
+             command)
+    ;; Execute after current run loop to allow shell to update itself.
+    (run-at-time 0.01 nil
+                 (lambda ()
+                   (shell-pager--initialize (shell-pager--current))))))
 
 (defun shell-pager-interrupt ()
   "Interrupt current shell command."
@@ -208,9 +221,17 @@
     (with-current-buffer shell-buffer
       (shell-pager))))
 
+(defun shell-pager--prompt ()
+  "Get the shell's prompt for current environment."
+  (when-let* ((prompt (map-elt shell-pager--config :prompt))
+              (valid (functionp prompt)))
+    (with-current-buffer (shell-pager--shell-buffer)
+      (if shell-pager-process-header-prompt
+          (funcall shell-pager-process-header-prompt (funcall prompt))
+        (funcall prompt)))))
+
 (defun shell-pager--current ()
-  "Show next interaction (command / output)."
-  (interactive)
+  "Get current shell item."
   (unless (eq (current-buffer) (shell-pager--buffer))
     (error "Not in a pager buffer"))
   (let* ((get-current (or (map-elt shell-pager--config :current)
@@ -250,40 +271,49 @@
             (push current-item items)))
         (nreverse items)))))
 
-(defun shell-pager--position ()
+(cl-defun shell-pager--position (&key new-candidate)
   "Return the position in history.
+
+If NEW-CANDIDATE is non-nil, return position at length + 1.
 
 In the form:
 
 1 out of 3 = (1 . 3)."
   (let* ((current (shell-pager--current))
          (history (shell-pager--shell-items))
-         (pos (seq-position history current
-                            ;; Must compare against locations as
-                            ;; commands and even outputs can yield
-                            ;; false positives.
-                            (lambda (lhs rhs)
-                              (or
-                               (equal (map-elt lhs :output-start)
-                                      (map-elt rhs :output-start))
-                               (equal (map-elt lhs :command-start)
-                                      (map-elt rhs :command-start)))))))
-    (when (and current history pos)
-      (cons (1+ pos) (length history)))))
+         (length (length history))
+         (pos (if new-candidate
+                  (1+ length)
+                (seq-position history current
+                              ;; Must compare against locations as
+                              ;; commands and even outputs can yield
+                              ;; false positives.
+                              (lambda (lhs rhs)
+                                (or
+                                 (equal (map-elt lhs :output-start)
+                                        (map-elt rhs :output-start))
+                                 (equal (map-elt lhs :command-start)
+                                        (map-elt rhs :command-start))))))))
+    (if new-candidate
+        (cons pos (1+ length))
+      (when (and current history pos)
+        (cons (1+ pos) (length history))))))
 
-(cl-defun shell-pager--history-label (&key override)
-  "Return the position in history of the primary shell buffer.
+(cl-defun shell-pager--page-num (&key new-candidate)
+  "Generate page number text in the form: [1/3].
 
-Can OVERRIDE position to be rendered."
-  (let ((text (or override
-                  (when-let ((pos (shell-pager--position)))
-                    (format "%d/%d" (car pos) (cdr pos)))
-                  "?/?")))
-    (propertize (format "[%s]\n\n" text)
-                'ignore t
-                'read-only t
-                'face font-lock-comment-face
-                'rear-nonsticky t)))
+If NEW-CANDIDATE is non-nil, return position at length + 1."
+  (if-let ((pos (shell-pager--position :new-candidate new-candidate)))
+      (format "[%d/%d]" (car pos) (cdr pos))
+    "[?/?]"))
+
+(defun shell-pager--propertize-header (text)
+  "Propertize TEXT as header."
+  (propertize text
+              'ignore t
+              'read-only t
+              'face font-lock-comment-face
+              'rear-nonsticky t))
 
 (defun shell-pager--compose-text ()
   "Get the compose buffer text (excluding header)."
@@ -312,15 +342,30 @@ Item is of the form:
       (erase-buffer)
       (insert
        (shell-pager--make-buffer-content
+        :header (shell-pager--propertize-header
+                 (concat (shell-pager--page-num)
+                         (when (map-elt item :prompt)
+                           (concat " "
+                                   (if shell-pager-process-header-prompt
+                                       (funcall shell-pager-process-header-prompt
+                                                (map-elt item :prompt))
+                                     (map-elt item :prompt)) " "))
+                         "\n\n"))
         :command (map-elt item :command)
-        :output (map-elt item :output))))))
+        :output (map-elt item :output))))
+    (if (map-elt item :command)
+        (progn
+          (goto-char (point-min))
+          (text-property-search-forward 'command t))
+      (goto-char (point-min))
+      (text-property-search-forward 'ignore nil))))
 
-(cl-defun shell-pager--make-buffer-content (&key label-override
+(cl-defun shell-pager--make-buffer-content (&key header
                                                  command
                                                  output)
-  "Make buffer content with POSITION, COMMAND, and OUTPUT."
+  "Make buffer content with HEADER, COMMAND, and OUTPUT."
   (concat
-   (shell-pager--history-label :override label-override)
+   header
    (when command
      (propertize command
                  'rear-nonsticky t
@@ -333,25 +378,36 @@ Item is of the form:
 
 (defun shell-pager--make-compose-buffer-content ()
   "Make buffer content with POSITION, COMMAND, and OUTPUT."
-  (propertize "[compose]\n\n"
-              'ignore t
-              'read-only t
-              'face 'font-lock-escape-face
-              'rear-nonsticky t))
+  (let* ((last-item (car (last (shell-pager--shell-items))))
+         (prompt (shell-pager--prompt)))
+    (propertize (concat
+                 "[new command]"
+                 (when prompt
+                   " ")
+                 (when prompt
+                   prompt)
+                 (when prompt
+                   " ")
+                 "\n\n")
+                'ignore t
+                'read-only t
+                'face 'font-lock-escape-face
+                'rear-nonsticky t)))
 
 (cl-defun shell-pager--make-config (&key shell-buffer
                                          page-buffer
                                          current
                                          next previous
                                          subscribe unsubscribe
-                                         submit interrupt)
+                                         submit interrupt
+                                         prompt)
   "Make pager config.
 
 Requires SHELL-BUFFER/PAGE-BUFFER as well as CURRENT, NEXT and PREVIOUS
 functions.
 
-For a richer experience provide SUBSCRIBE, UNSUBSCRIBE, SUBMIT and INTERRUPT
-functions."
+For a richer experience provide SUBSCRIBE, UNSUBSCRIBE, SUBMIT, INTERRUPT
+and PROMPT functions."
   (let ((config))
     (when shell-buffer
       (setq config
@@ -389,6 +445,10 @@ functions."
       (setq config
             (map-insert config
                         :interrupt interrupt)))
+    (when prompt
+      (setq config
+            (map-insert config
+                        :prompt prompt)))
     config))
 
 (defun shell-pager--resolve-shell-buffer (buffer)
@@ -404,8 +464,9 @@ functions."
             :subscribe #'shell-pager--eshell-subscribe
             :unsubscribe #'shell-pager--eshell-unsubscribe
             :submit #'shell-pager--eshell-submit
-            :interrupt #'shell-pager--eshell-interrupt))
-	  ((derived-mode-p 'inferior-ess-r-mode)
+            :interrupt #'shell-pager--eshell-interrupt
+            :prompt #'shell-pager--eshell-prompt))))
+	        ((derived-mode-p 'inferior-ess-r-mode)
            (shell-pager--make-config
             :shell-buffer buffer
             :page-buffer (shell-pager--buffer)
@@ -427,6 +488,11 @@ functions."
 (defun shell-pager--buffer ()
   "Get the available shell pager buffer."
   (get-buffer-create "*shell pager*"))
+
+(defun shell-pager--eshell-prompt ()
+  "Generate prompt for shell environment."
+  (when eshell-prompt-function
+    (funcall eshell-prompt-function)))
 
 (defun shell-pager--eshell-interrupt ()
   "Interrupt eshell's ongoing command."
@@ -531,13 +597,23 @@ Item is of the form:
   (unless (eq major-mode 'eshell-mode)
     (error "Not in an eshell buffer"))
   (save-excursion
-    (let ((command-start)
+    (let ((prompt-start)
+          (prompt-end)
+          (prompt)
+          (command-start)
           (command-end)
           (command)
           (output-start)
           (output-end)
           (output))
       (when (re-search-backward eshell-prompt-regexp nil t)
+        (setq prompt-start (match-beginning 0))
+        (setq prompt-end (match-end 0))
+        (when (and prompt-start
+                   prompt-end)
+          (setq prompt (buffer-substring-no-properties
+                        prompt-start
+                        prompt-end)))
         (setq command-start (match-end 0))
         (if-let ((match (text-property-search-forward 'field nil nil t)))
             (progn
@@ -563,7 +639,10 @@ Item is of the form:
                       output-start
                       output-end)))
       (when (or command output)
-        (list :command command
+        (list :prompt prompt
+              :prompt-start prompt-start
+              :prompt-end prompt-end
+              :command command
               :command-start command-start
               :command-end command-end
               :output output
