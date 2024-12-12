@@ -7,6 +7,8 @@
 (require 'em-prompt)
 (require 'comint)
 
+(require 'shell-pager-ess)
+
 ;;; Code:
 
 (defcustom shell-pager-process-header-prompt
@@ -52,16 +54,19 @@
 (defun shell-pager ()
   "Open the pager for current shell."
   (interactive)
-  (unless (derived-mode-p 'eshell-mode)
-    (user-error "Not in eshell"))
+  (unless (or (derived-mode-p 'eshell-mode)
+	      (derived-mode-p 'inferior-ess-r-mode))
+    (user-error "Not in a supported shell"))
   (let ((shell-buffer (current-buffer))
-        (entry (shell-pager--eshell-current-item))
-        (config))
+        (entry)
+	(config))
     (with-current-buffer (shell-pager--buffer)
       (shell-pager-mode)
       (shell-pager-view-mode +1)
       (setq config (shell-pager--resolve-shell-buffer shell-buffer))
       (setq shell-pager--config config)
+      (setq entry (with-current-buffer shell-buffer
+		    (funcall (map-elt config :current))))
       (let ((inhibit-read-only t))
         (shell-pager--initialize entry)))
     (when (map-elt config :subscribe)
@@ -460,7 +465,18 @@ and PROMPT functions."
             :unsubscribe #'shell-pager--eshell-unsubscribe
             :submit #'shell-pager--eshell-submit
             :interrupt #'shell-pager--eshell-interrupt
-            :prompt #'shell-pager--eshell-prompt))
+            :prompt #'shell-pager--eshell-prompt))))
+	        ((derived-mode-p 'inferior-ess-r-mode)
+           (shell-pager--make-config
+            :shell-buffer buffer
+            :page-buffer (shell-pager--buffer)
+            :next #'shell-pager--ess-r-next
+            :previous #'shell-pager--ess-r-previous
+            :current #'shell-pager--ess-r-current-item
+            :subscribe #'shell-pager--ess-r-subscribe
+            :unsubscribe #'shell-pager--ess-r-unsubscribe
+            :submit #'shell-pager--ess-r-submit
+            :interrupt #'shell-pager--ess-r-interrupt))
           (t
            (error "Don't know how to page %s" major-mode)))))
 
@@ -632,5 +648,6 @@ Item is of the form:
               :output output
               :output-start output-start
               :output-end output-end)))))
+
 
 ;;; shell-pager.el ends here
