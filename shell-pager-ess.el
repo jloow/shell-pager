@@ -204,4 +204,4 @@ Return non-nil if point moved"
 
 (provide 'shell-pager-ess)
 
-;;; shell-pager-ess. ends here
+;;; shell-pager-ess.el ends here

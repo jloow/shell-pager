@@ -465,8 +465,8 @@ and PROMPT functions."
             :unsubscribe #'shell-pager--eshell-unsubscribe
             :submit #'shell-pager--eshell-submit
             :interrupt #'shell-pager--eshell-interrupt
-            :prompt #'shell-pager--eshell-prompt))))
-	        ((derived-mode-p 'inferior-ess-r-mode)
+            :prompt #'shell-pager--eshell-prompt))
+	  ((derived-mode-p 'inferior-ess-r-mode)
            (shell-pager--make-config
             :shell-buffer buffer
             :page-buffer (shell-pager--buffer)
