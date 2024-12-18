@@ -36,6 +36,7 @@
       (re-search-forward regexp nil t)
       (goto-char (match-end 0)))))
 
+;; TODO: Refactor and clean up this code
 (defun shell-pager--previous-prompt-regexp (regexp)
   "Move to previous prompt based REGEXP."
   (let ((prev-point (point))
@@ -46,7 +47,8 @@
     ;; If we didn't move, "nudge" and try again
     (when (eq (point) prev-point)
       (setq prev-point (point))
-      (backward-char)
+      (forward-line -1)
+      (end-of-line)
       (re-search-backward regexp nil t)
       (setq new-point (match-end 0))
       ;; Don't circle back around. (Can this be specified in
@@ -58,7 +60,8 @@
 
 ;; There is also `inferior-ess-prompt' but it doesn't match in a way
 ;; that work for `shell-pager'
-(defvar shell-pager--ess-r-prompt-regexp "^\\(?:+ \\)*> "
+(defvar shell-pager--ess-r-prompt-regexp
+  "^\\(?:\\(?:+\s\\)\\|\\(?:>\s\\)\\|\\(?:\\.\s\\)\\)+"
   "Regexp for ESS/R shell prompt.")
 
 (defun shell-pager--ess-r-next ()
