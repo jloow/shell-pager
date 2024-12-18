@@ -649,5 +649,6 @@ Item is of the form:
               :output-start output-start
               :output-end output-end)))))
 
+(provide 'shell-pager)
 
 ;;; shell-pager.el ends here
