@@ -1,5 +1,6 @@
 ;;; shell-pager.el --- A pager for shells  -*- lexical-binding: t -*-
 
+;; Version: 0.0.1
 
 ;;; Commentary:
 ;;
